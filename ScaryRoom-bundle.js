@@ -7759,18 +7759,22 @@ var MonsterAI = class extends Component32 {
     this.timer = Math.max(0, this.delayBeforeChase);
     this.fadeAlpha = 0;
     this.lastDebugState = null;
-    this.fadeLogged = false;
+    this.scareWaitLogged = false;
+    this.lastFadeProgress = -1;
     this.position = new Float32Array(3);
     this.targetPosition = new Float32Array(3);
     this.circlePosition = new Float32Array(3);
     this.startPosition = new Float32Array(3);
     this.endPosition = new Float32Array(3);
+    this.idleAnimation = this.idleAnimator?.getComponent("animation");
     this.runAnimation = this.runAnimator?.getComponent("animation");
     this.scareAnimation = this.scareAnimator?.getComponent("animation");
     this.fadeMesh = this.fadeObject?.getComponent("mesh");
-    if (!this.target || !this.playerRoot || !this.scareCircle || !this.runAnimation || !this.scareAnimation) {
+    this.chaseAudio = this.chaseSoundObject?.getComponent("audio-source");
+    this.scareAudio = this.soundObject?.getComponent("audio-source");
+    if (!this.target || !this.playerRoot || !this.scareCircle || !this.idleAnimation || !this.runAnimation || !this.scareAnimation) {
       console.error(
-        "[MonsterAI] Faltan referencias. Comprueba Target, Player Root, Scare Circle, Run Animator y Scare Animator."
+        "[MonsterAI] Faltan referencias. Comprueba Target, Player Root, Scare Circle, Idle Animator, Run Animator y Scare Animator."
       );
       this.state = "error";
       return;
@@ -7790,6 +7794,8 @@ var MonsterAI = class extends Component32 {
         "[MonsterAI] Fade Object no tiene un componente mesh con material asignado"
       );
     }
+    this.idleAnimation.stop();
+    this.idleAnimation.playCount = 0;
     this.runAnimation.stop();
     this.runAnimation.playCount = 0;
     this.scareAnimation.stop();
@@ -7798,7 +7804,23 @@ var MonsterAI = class extends Component32 {
       0.1,
       this.scareAnimationSpeed
     );
-    if (this.timer <= 0) {
+    if (this.chaseAudio) {
+      if (typeof this.chaseAudio.stop === "function") {
+        this.chaseAudio.stop();
+      }
+    } else {
+      console.warn(
+        "[MonsterAI] No se ha asignado un Audio Source v\xE1lido para la persecuci\xF3n."
+      );
+    }
+    if (this.timer > 0) {
+      this.idleAnimation.play();
+      console.log(
+        "[MonsterAI] Idle iniciado durante",
+        this.timer,
+        "segundos"
+      );
+    } else {
       this.startChase();
     }
   }
@@ -7830,9 +7852,61 @@ var MonsterAI = class extends Component32 {
     if (this.state !== "waiting")
       return;
     console.log("[MonsterAI] Comienza la persecuci\xF3n");
+    if (this.idleAnimation) {
+      this.idleAnimation.stop();
+    }
     this.state = "chase";
     this.runAnimation.playCount = 0;
     this.runAnimation.play();
+    this.playChaseAudio();
+  }
+  playChaseAudio() {
+    if (!this.chaseSoundObject) {
+      console.warn(
+        "[MonsterAI] Falta asignar chaseSoundObject"
+      );
+      return;
+    }
+    if (!this.chaseAudio) {
+      this.chaseAudio = this.chaseSoundObject.getComponent("audio-source");
+    }
+    if (!this.chaseAudio) {
+      console.error(
+        "[MonsterAI] No existe Audio Source en chaseSoundObject"
+      );
+      return;
+    }
+    try {
+      if (typeof this.chaseAudio.isPlaying === "boolean" && this.chaseAudio.isPlaying) {
+        return;
+      }
+      this.chaseAudio.play();
+      console.log(
+        "[MonsterAI] Sonido de persecuci\xF3n iniciado"
+      );
+    } catch (error) {
+      console.error(
+        "[MonsterAI] Error al reproducir el sonido de persecuci\xF3n:",
+        error
+      );
+    }
+  }
+  stopChaseAudio() {
+    if (!this.chaseAudio)
+      return;
+    try {
+      if (typeof this.chaseAudio.stop === "function") {
+        this.chaseAudio.stop();
+        console.log(
+          "[MonsterAI] Sonido de persecuci\xF3n detenido"
+        );
+      }
+    } catch (error) {
+      console.error(
+        "[MonsterAI] Error al detener el sonido de persecuci\xF3n:",
+        error
+      );
+    }
   }
   updateChase(dt) {
     this.target.getTranslationWorld(this.targetPosition);
@@ -7864,12 +7938,16 @@ var MonsterAI = class extends Component32 {
     if (this.state !== "chase")
       return;
     console.log("[MonsterAI] Iniciando susto");
-    console.log("[MonsterAI] soundObject:", this.soundObject);
-    console.log("[MonsterAI] scareAnimation:", this.scareAnimation);
     this.state = "scare";
     this.timer = 0;
     this.fadeAlpha = 0;
+    this.scareWaitLogged = false;
+    this.lastFadeProgress = -1;
     this.runAnimation.stop();
+    this.stopChaseAudio();
+    if (this.idleAnimation) {
+      this.idleAnimation.stop();
+    }
     if (this.fadeMaterial) {
       this.setFadeAlpha(0);
     }
@@ -7934,11 +8012,15 @@ var MonsterAI = class extends Component32 {
   playScareAudio() {
     console.log("[MonsterAI] Iniciando audio del susto");
     if (!this.soundObject) {
-      console.error("[MonsterAI] Falta asignar soundObject");
+      console.error(
+        "[MonsterAI] Falta asignar soundObject"
+      );
       return;
     }
-    const audio = this.soundObject.getComponent("audio-source");
-    if (!audio) {
+    if (!this.scareAudio) {
+      this.scareAudio = this.soundObject.getComponent("audio-source");
+    }
+    if (!this.scareAudio) {
       console.error(
         "[MonsterAI] No existe Audio Source en:",
         this.soundObject.name
@@ -7946,17 +8028,21 @@ var MonsterAI = class extends Component32 {
       return;
     }
     try {
-      console.log("[MonsterAI] Audio Source encontrado:", audio);
-      if (typeof audio.play !== "function") {
+      if (typeof this.scareAudio.play !== "function") {
         console.error(
-          "[MonsterAI] Este Audio Source no expone el m\xE9todo play()"
+          "[MonsterAI] El Audio Source no expone play()"
         );
         return;
       }
-      audio.play();
-      console.log("[MonsterAI] Se ha llamado a audio.play()");
+      this.scareAudio.play();
+      console.log(
+        "[MonsterAI] Audio del jumpscare iniciado"
+      );
     } catch (error) {
-      console.error("[MonsterAI] Error de reproducci\xF3n:", error);
+      console.error(
+        "[MonsterAI] Error de reproducci\xF3n:",
+        error
+      );
     }
   }
   updateScare(dt) {
@@ -7979,7 +8065,9 @@ var MonsterAI = class extends Component32 {
       this.scareWaitLogged = true;
     }
     if (this.timer >= this.animationWait) {
-      console.log("[MonsterAI] El susto termina; comienza el fundido");
+      console.log(
+        "[MonsterAI] El susto termina; comienza el fundido"
+      );
       this.state = "fade";
       this.timer = 0;
       this.scareWaitLogged = false;
@@ -7991,12 +8079,17 @@ var MonsterAI = class extends Component32 {
     const t = Math.min(1, this.timer / duration);
     const progress = Math.floor(t * 10);
     if (progress !== this.lastFadeProgress) {
-      console.log("[DeathFade] Progreso:", progress * 10 + "%");
+      console.log(
+        "[DeathFade] Progreso:",
+        progress * 10 + "%"
+      );
       this.lastFadeProgress = progress;
     }
     this.setFadeAlpha(t);
     if (t >= 1) {
-      console.log("[DeathFade] Pantalla completamente negra");
+      console.log(
+        "[DeathFade] Pantalla completamente negra"
+      );
       this.state = "black";
       this.timer = 0;
       this.lastFadeProgress = -1;
@@ -8023,7 +8116,10 @@ var MonsterAI = class extends Component32 {
         [...this.fadeMaterial.constructor.Parameters]
       );
     } catch (error) {
-      console.error("[DeathFade] Error al cambiar el alfa:", error);
+      console.error(
+        "[DeathFade] Error al cambiar el alfa:",
+        error
+      );
     }
   }
 };
@@ -8034,8 +8130,12 @@ __publicField(MonsterAI, "Properties", {
   // Raíz del rig XR: se teletransporta, nunca Head.
   playerRoot: Property5.object(),
   scareCircle: Property5.object(),
+  // Animaciones.
+  idleAnimator: Property5.object(),
   runAnimator: Property5.object(),
   scareAnimator: Property5.object(),
+  // Audio de persecución y audio del jumpscare.
+  chaseSoundObject: Property5.object(),
   soundObject: Property5.object(),
   // Plano DeathFade, hijo de Head.
   fadeObject: Property5.object(),
